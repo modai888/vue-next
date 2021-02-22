@@ -65,13 +65,28 @@ type PropMethod<T, TConstructor = any> = T extends (...args: any) => any // if i
   : never
 
 type RequiredKeys<T> = {
-  [K in keyof T]: T[K] extends { required: true } | { default: any } ? K : never
+  [K in keyof T]: T[K] extends
+    | { required: true }
+    | { default: any }
+    // don't mark Boolean props as undefined
+    | BooleanConstructor
+    | { type: BooleanConstructor }
+    ? K
+    : never
 }[keyof T]
 
 type OptionalKeys<T> = Exclude<keyof T, RequiredKeys<T>>
 
 type DefaultKeys<T> = {
-  [K in keyof T]: T[K] extends { default: any } ? K : never
+  [K in keyof T]: T[K] extends
+    | { default: any }
+    // Boolean implicitly defaults to false
+    | BooleanConstructor
+    | { type: BooleanConstructor }
+    ? T[K] extends { type: BooleanConstructor; required: true } // not default if Boolean is marked as required
+      ? never
+      : K
+    : never
 }[keyof T]
 
 type InferPropType<T> = T extends null
@@ -82,7 +97,9 @@ type InferPropType<T> = T extends null
       ? Record<string, any>
       : T extends BooleanConstructor | { type: BooleanConstructor }
         ? boolean
-        : T extends Prop<infer V, infer D> ? (unknown extends V ? D : V) : T
+        : T extends DateConstructor | { type: DateConstructor }
+          ? Date
+          : T extends Prop<infer V, infer D> ? (unknown extends V ? D : V) : T
 
 export type ExtractPropTypes<O> = O extends object
   ? { [K in RequiredKeys<O>]: InferPropType<O[K]> } &
@@ -156,8 +173,14 @@ export function updateProps(
   const [options] = instance.propsOptions
 
   if (
-    // always force full diff if hmr is enabled
-    !(__DEV__ && instance.type.__hmrId) &&
+    // always force full diff in dev
+    // - #1942 if hmr is enabled with sfc component
+    // - vite#872 non-sfc component used by sfc component
+    !(
+      __DEV__ &&
+      (instance.type.__hmrId ||
+        (instance.parent && instance.parent.type.__hmrId))
+    ) &&
     (optimized || patchFlag > 0) &&
     !(patchFlag & PatchFlags.FULL_PROPS)
   ) {
@@ -328,11 +351,8 @@ export function normalizePropsOptions(
   appContext: AppContext,
   asMixin = false
 ): NormalizedPropsOptions {
-  const appId = appContext.app ? appContext.app._uid : -1
-  const cache = comp.__props || (comp.__props = {})
-  const cached = cache[appId]
-  if (cached) {
-    return cached
+  if (!appContext.deopt && comp.__props) {
+    return comp.__props
   }
 
   const raw = comp.props
@@ -360,7 +380,7 @@ export function normalizePropsOptions(
   }
 
   if (!raw && !hasExtends) {
-    return (cache[appId] = EMPTY_ARR)
+    return (comp.__props = EMPTY_ARR as any)
   }
 
   if (isArray(raw)) {
@@ -398,7 +418,16 @@ export function normalizePropsOptions(
     }
   }
 
-  return (cache[appId] = [normalized, needCastKeys])
+  return (comp.__props = [normalized, needCastKeys])
+}
+
+function validatePropName(key: string) {
+  if (key[0] !== '$') {
+    return true
+  } else if (__DEV__) {
+    warn(`Invalid prop name: "${key}" is a reserved property.`)
+  }
+  return false
 }
 
 // use function string name to check type constructors
@@ -444,18 +473,6 @@ function validateProps(props: Data, instance: ComponentInternalInstance) {
 /**
  * dev only
  */
-function validatePropName(key: string) {
-  if (key[0] !== '$') {
-    return true
-  } else if (__DEV__) {
-    warn(`Invalid prop name: "${key}" is a reserved property.`)
-  }
-  return false
-}
-
-/**
- * dev only
- */
 function validateProp(
   name: string,
   value: unknown,
@@ -495,7 +512,7 @@ function validateProp(
 }
 
 const isSimpleType = /*#__PURE__*/ makeMap(
-  'String,Number,Boolean,Function,Symbol'
+  'String,Number,Boolean,Function,Symbol,BigInt'
 )
 
 type AssertionResult = {

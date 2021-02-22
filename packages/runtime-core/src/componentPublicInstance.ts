@@ -1,4 +1,8 @@
-import { ComponentInternalInstance, Data } from './component'
+import {
+  ComponentInternalInstance,
+  Data,
+  isStatefulComponent
+} from './component'
 import { nextTick, queueJob } from './scheduler'
 import { instanceWatch, WatchOptions, WatchStopHandle } from './apiWatch'
 import {
@@ -200,6 +204,19 @@ export type ComponentPublicInstance<
 
 type PublicPropertiesMap = Record<string, (i: ComponentInternalInstance) => any>
 
+/**
+ * #2437 In Vue 3, functional components do not have a public instance proxy but
+ * they exist in the internal parent chain. For code that relies on traversing
+ * public $parent chains, skip functional ones and go to the parent instead.
+ */
+const getPublicInstance = (
+  i: ComponentInternalInstance | null
+): ComponentPublicInstance | ComponentInternalInstance['exposed'] | null => {
+  if (!i) return null
+  if (isStatefulComponent(i)) return i.exposed ? i.exposed : i.proxy
+  return getPublicInstance(i.parent)
+}
+
 const publicPropertiesMap: PublicPropertiesMap = extend(Object.create(null), {
   $: i => i,
   $el: i => i.vnode.el,
@@ -208,12 +225,12 @@ const publicPropertiesMap: PublicPropertiesMap = extend(Object.create(null), {
   $attrs: i => (__DEV__ ? shallowReadonly(i.attrs) : i.attrs),
   $slots: i => (__DEV__ ? shallowReadonly(i.slots) : i.slots),
   $refs: i => (__DEV__ ? shallowReadonly(i.refs) : i.refs),
-  $parent: i => i.parent && i.parent.proxy,
-  $root: i => i.root && i.root.proxy,
+  $parent: i => getPublicInstance(i.parent),
+  $root: i => getPublicInstance(i.root),
   $emit: i => i.emit,
   $options: i => (__FEATURE_OPTIONS_API__ ? resolveMergedOptions(i) : i.type),
   $forceUpdate: i => () => queueJob(i.update),
-  $nextTick: () => nextTick,
+  $nextTick: i => nextTick.bind(i.proxy!),
   $watch: i => (__FEATURE_OPTIONS_API__ ? instanceWatch.bind(i) : NOOP)
 } as PublicPropertiesMap)
 
@@ -244,6 +261,11 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
 
     // let @vue/reactivity know it should never observe Vue public instances.
     if (key === ReactiveFlags.SKIP) {
+      return true
+    }
+
+    // for internal formatters to know that this is a Vue instance
+    if (__DEV__ && key === '__isVue') {
       return true
     }
 
@@ -334,7 +356,7 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
           )} must be accessed via $data because it starts with a reserved ` +
             `character ("$" or "_") and is not proxied on the render context.`
         )
-      } else {
+      } else if (instance === currentRenderingInstance) {
         warn(
           `Property ${JSON.stringify(key)} was accessed during render ` +
             `but is not defined on instance.`
@@ -353,7 +375,7 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
       setupState[key] = value
     } else if (data !== EMPTY_OBJ && hasOwn(data, key)) {
       data[key] = value
-    } else if (key in instance.props) {
+    } else if (hasOwn(instance.props, key)) {
       __DEV__ &&
         warn(
           `Attempting to mutate prop "${key}". Props are readonly.`,

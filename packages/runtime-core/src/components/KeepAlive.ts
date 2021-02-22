@@ -1,11 +1,11 @@
 import {
   ConcreteComponent,
   getCurrentInstance,
-  FunctionalComponent,
   SetupContext,
   ComponentInternalInstance,
   LifecycleHooks,
-  currentInstance
+  currentInstance,
+  getComponentName
 } from '../component'
 import { VNode, cloneVNode, isVNode, VNodeProps } from '../vnode'
 import { warn } from '../warning'
@@ -69,8 +69,6 @@ const KeepAliveImpl = {
   // check directly on KeepAlive in the renderer, because importing it directly
   // would prevent it from being tree-shaken.
   __isKeepAlive: true,
-
-  inheritRef: true,
 
   props: {
     include: [String, RegExp, Array],
@@ -151,7 +149,7 @@ const KeepAliveImpl = {
 
     function pruneCache(filter?: (name: string) => boolean) {
       cache.forEach((vnode, key) => {
-        const name = getName(vnode.type as ConcreteComponent)
+        const name = getComponentName(vnode.type as ConcreteComponent)
         if (name && (!filter || !filter(name))) {
           pruneCacheEntry(key)
         }
@@ -179,7 +177,7 @@ const KeepAliveImpl = {
         exclude && pruneCache(name => !matches(exclude, name))
       },
       // prune post-render after `current` has been updated
-      { flush: 'post' }
+      { flush: 'post', deep: true }
     )
 
     // cache sub tree after render
@@ -235,7 +233,7 @@ const KeepAliveImpl = {
 
       let vnode = getInnerChild(rawVNode)
       const comp = vnode.type as ConcreteComponent
-      const name = getName(comp)
+      const name = getComponentName(comp)
       const { include, exclude, max } = props
 
       if (
@@ -299,10 +297,6 @@ export const KeepAlive = (KeepAliveImpl as any) as {
   new (): {
     $props: VNodeProps & KeepAliveProps
   }
-}
-
-function getName(comp: ConcreteComponent): string | void {
-  return (comp as FunctionalComponent).displayName || comp.name
 }
 
 function matches(pattern: MatchPattern, name: string): boolean {

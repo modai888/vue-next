@@ -29,7 +29,7 @@ export interface App<HostElement = any> {
     rootContainer: HostElement | string,
     isHydrate?: boolean
   ): ComponentPublicInstance
-  unmount(rootContainer: HostElement | string): void
+  unmount(): void
   provide<T>(key: InjectionKey<T> | string, value: T): this
 
   // internal, but we need to expose these for the server-renderer and devtools
@@ -74,7 +74,16 @@ export interface AppContext {
   components: Record<string, Component>
   directives: Record<string, Directive>
   provides: Record<string | symbol, any>
-  reload?: () => void // HMR only
+  /**
+   * Flag for de-optimizing props normalization
+   * @internal
+   */
+  deopt?: boolean
+  /**
+   * HMR only
+   * @internal
+   */
+  reload?: () => void
 }
 
 type PluginInstallFunction = (app: App, ...options: any[]) => any
@@ -169,6 +178,11 @@ export function createAppAPI<HostElement>(
         if (__FEATURE_OPTIONS_API__) {
           if (!context.mixins.includes(mixin)) {
             context.mixins.push(mixin)
+            // global mixin with props/emits de-optimizes props/emits
+            // normalization caching.
+            if (mixin.props || mixin.emits) {
+              context.deopt = true
+            }
           } else if (__DEV__) {
             warn(
               'Mixin has already been applied to target app' +
@@ -258,6 +272,7 @@ export function createAppAPI<HostElement>(
           if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
             devtoolsUnmountApp(app)
           }
+          delete app._container.__vue_app__
         } else if (__DEV__) {
           warn(`Cannot unmount an app that is not mounted.`)
         }

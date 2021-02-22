@@ -21,7 +21,7 @@ import {
   isClassComponent
 } from './component'
 import { RawSlots } from './componentSlots'
-import { isProxy, Ref, toRaw, ReactiveFlags } from '@vue/reactivity'
+import { isProxy, Ref, toRaw, ReactiveFlags, isRef } from '@vue/reactivity'
 import { AppContext } from './apiCreateApp'
 import {
   SuspenseImpl,
@@ -243,7 +243,7 @@ export function createBlock(
     true /* isBlock: prevent a block from tracking itself */
   )
   // save current block children on the block vnode
-  vnode.dynamicChildren = currentBlock || EMPTY_ARR
+  vnode.dynamicChildren = currentBlock || (EMPTY_ARR as any)
   // close block
   closeBlock()
   // a block is always going to be patched, so track it as a child of its
@@ -304,9 +304,9 @@ const normalizeKey = ({ key }: VNodeProps): VNode['key'] =>
 
 const normalizeRef = ({ ref }: VNodeProps): VNodeNormalizedRefAtom | null => {
   return (ref != null
-    ? isArray(ref)
-      ? ref
-      : { i: currentRenderingInstance, r: ref }
+    ? isString(ref) || isRef(ref) || isFunction(ref)
+      ? { i: currentRenderingInstance, r: ref }
+      : ref
     : null) as any
 }
 
@@ -459,7 +459,7 @@ export function cloneVNode<T, U>(
 ): VNode<T, U> {
   // This is intentionally NOT using spread or extend to avoid the runtime
   // key enumeration cost.
-  const { props, ref, patchFlag } = vnode
+  const { props, ref, patchFlag, children } = vnode
   const mergedProps = extraProps ? mergeProps(props || {}, extraProps) : props
   return {
     __v_isVNode: true,
@@ -479,7 +479,10 @@ export function cloneVNode<T, U>(
           : normalizeRef(extraProps)
         : ref,
     scopeId: vnode.scopeId,
-    children: vnode.children,
+    children:
+      __DEV__ && patchFlag === PatchFlags.HOISTED && isArray(children)
+        ? (children as VNode[]).map(deepCloneVNode)
+        : children,
     target: vnode.target,
     targetAnchor: vnode.targetAnchor,
     staticCount: vnode.staticCount,
@@ -511,6 +514,18 @@ export function cloneVNode<T, U>(
     el: vnode.el,
     anchor: vnode.anchor
   }
+}
+
+/**
+ * Dev only, for HMR of hoisted vnodes reused in v-for
+ * https://github.com/vitejs/vite/issues/2022
+ */
+function deepCloneVNode(vnode: VNode): VNode {
+  const cloned = cloneVNode(vnode)
+  if (isArray(vnode.children)) {
+    cloned.children = (vnode.children as VNode[]).map(deepCloneVNode)
+  }
+  return cloned
 }
 
 /**
@@ -644,7 +659,7 @@ export function mergeProps(...args: (Data & VNodeProps)[]) {
             ? [].concat(existing as any, toMerge[key] as any)
             : incoming
         }
-      } else {
+      } else if (key !== '') {
         ret[key] = toMerge[key]
       }
     }
